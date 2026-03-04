@@ -124,15 +124,8 @@ static int callback_websocket(struct lws *wsi,
 
             lws_callback_on_writable(wsi);
             break;
-        case LWS_CALLBACK_RECEIVE: { // the funny part
-            // create a buffer to hold our response
-            // it has to have some pre and post padding. You don't need to care
-            // what comes there, lwss will do everything for you. For more info see
-            // https://github.com/warmcat/libwebsockets/blob/main/include/libwebsockets.h#L597
-            unsigned char *buf = (unsigned char*) malloc(LWS_SEND_BUFFER_PRE_PADDING + len +
-                                                         LWS_SEND_BUFFER_POST_PADDING);
-
-            // log what we received and what we're going to send as a response.
+        case LWS_CALLBACK_RECEIVE: {
+            // log what we received.
             // that disco syntax `%.*s` is used to print just a part of our buffer
             // http://stackoverflow.com/questions/5189071/print-part-of-char-array
             printf("received data: %.*s\n", (int)len, (char*)in);
@@ -177,6 +170,7 @@ static int callback_websocket(struct lws *wsi,
                 LeapSetTrackingMode(connectionHandle, eLeapTrackingMode_Desktop);
             }
 
+            free(answer);
             break;
         }
         case LWS_CALLBACK_SERVER_WRITEABLE: {
