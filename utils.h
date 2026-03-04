@@ -45,4 +45,24 @@ enum FLAGS {
 	BACKGROUND
 };
 
+#define MAX_DEVICES 4
+#define DEVICE_EVENT_JSON_MAX_SIZE 256
+
+typedef struct {
+	uint32_t device_id;
+	uint32_t pid;
+	uint32_t status;
+	bool     attached;
+	uint32_t version;
+} DeviceState;
+
+typedef struct {
+	int      flags;
+	uint32_t deviceVersions[MAX_DEVICES];
+	uint32_t lastSeenDeviceVersion;
+} ClientSession;
+
+int deviceEventToJSON(const DeviceState* dev, char* buf);
+const char* devicePIDToTypeString(uint32_t pid);
+
 #endif

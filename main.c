@@ -20,6 +20,37 @@ static volatile bool ultraleap_thread_running = false;
 
 static uint64_t previousEventID = 0;
 
+static DeviceState devices[MAX_DEVICES] = {0};
+static volatile uint32_t deviceGlobalVersion = 0;
+
+// Must be called with ultraleap_lock held. Returns the slot index, or -1.
+static int handleDeviceEvent(const LEAP_DEVICE_EVENT* event, bool attached) {
+    int slot = -1;
+    for (int i = 0; i < MAX_DEVICES; i++) {
+        if (devices[i].attached && devices[i].device_id == event->device.id) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot < 0 && attached) {
+        for (int i = 0; i < MAX_DEVICES; i++) {
+            if (!devices[i].attached) {
+                slot = i;
+                break;
+            }
+        }
+    }
+    if (slot < 0) return -1;
+
+    devices[slot].device_id = event->device.id;
+    devices[slot].status    = event->status;
+    devices[slot].attached  = attached;
+    devices[slot].version++;
+    deviceGlobalVersion++;
+
+    return slot;
+}
+
 void handleTrackingEvent(const LEAP_TRACKING_EVENT* event) {
     pthread_mutex_lock(&ultraleap_lock);
 
@@ -70,6 +101,50 @@ void* serviceMessageLoop(void* vargp) {
             case eLeapEventType_Tracking:
                 handleTrackingEvent(msg.tracking_event);
                 break;
+            case eLeapEventType_Device: {
+                LEAP_DEVICE_REF ref = msg.device_event->device;
+                pthread_mutex_lock(&ultraleap_lock);
+                int slot = handleDeviceEvent(msg.device_event, true);
+                bool needPid = (slot >= 0 && devices[slot].pid == 0);
+                pthread_mutex_unlock(&ultraleap_lock);
+
+                // Fetch device PID outside the lock to avoid blocking clients
+                if (needPid) {
+                    LEAP_DEVICE hDevice;
+                    if (LeapOpenDevice(ref, &hDevice) == eLeapRS_Success) {
+                        LEAP_DEVICE_INFO info = { .size = sizeof(LEAP_DEVICE_INFO) };
+                        LeapGetDeviceInfo(hDevice, &info);
+                        pthread_mutex_lock(&ultraleap_lock);
+                        if (slot >= 0 && slot < MAX_DEVICES) {
+                            devices[slot].pid = info.pid;
+                        }
+                        pthread_mutex_unlock(&ultraleap_lock);
+                        LeapCloseDevice(hDevice);
+                    }
+                }
+                printf("Device connected (id: %u)\n", ref.id);
+                break;
+            }
+            case eLeapEventType_DeviceLost:
+                pthread_mutex_lock(&ultraleap_lock);
+                handleDeviceEvent(msg.device_event, false);
+                pthread_mutex_unlock(&ultraleap_lock);
+                printf("Device lost (id: %u)\n", msg.device_event->device.id);
+                break;
+            case eLeapEventType_DeviceStatusChange: {
+                const LEAP_DEVICE_STATUS_CHANGE_EVENT* evt = msg.device_status_change_event;
+                pthread_mutex_lock(&ultraleap_lock);
+                for (int i = 0; i < MAX_DEVICES; i++) {
+                    if (devices[i].attached && devices[i].device_id == evt->device.id) {
+                        devices[i].status = evt->status;
+                        devices[i].version++;
+                        deviceGlobalVersion++;
+                        break;
+                    }
+                }
+                pthread_mutex_unlock(&ultraleap_lock);
+                break;
+            }
             default:
                 break;
         }
@@ -120,11 +195,16 @@ static int callback_websocket(struct lws *wsi,
             }
 
             // Set the first bit to 0 so we will send the version on the next frame
-            *((int*)user) = clearBit(*((int*)user), NEW);
+            {
+                ClientSession* session = (ClientSession*)user;
+                session->flags = clearBit(session->flags, NEW);
+            }
 
             lws_callback_on_writable(wsi);
             break;
-        case LWS_CALLBACK_RECEIVE: {
+        case LWS_CALLBACK_RECEIVE: { // the funny part
+            ClientSession* session = (ClientSession*)user;
+
             // log what we received.
             // that disco syntax `%.*s` is used to print just a part of our buffer
             // http://stackoverflow.com/questions/5189071/print-part-of-char-array
@@ -139,25 +219,25 @@ static int callback_websocket(struct lws *wsi,
 
             if (strcmp(answer, "{\"focused\":true}") == 0)
             {
-                *((int*)user) = setBit(*((int*)user), FOCUSED);
+                session->flags = setBit(session->flags, FOCUSED);
 
                 // Program next send
                 lws_callback_on_writable(wsi);
             }
             else if (strcmp(answer, "{\"focused\":false}") == 0)
             {
-                *((int*)user) = clearBit(*((int*)user), FOCUSED);
+                session->flags = clearBit(session->flags, FOCUSED);
             }
             else if (strcmp(answer, "{\"background\":true}") == 0)
             {
-                *((int*)user) = setBit(*((int*)user), BACKGROUND);
+                session->flags = setBit(session->flags, BACKGROUND);
 
                 // Program next send
                 lws_callback_on_writable(wsi);
             }
             else if (strcmp(answer, "{\"background\":false}") == 0)
             {
-                *((int*)user) = clearBit(*((int*)user), BACKGROUND);
+                session->flags = clearBit(session->flags, BACKGROUND);
             }
             else if (strcmp(answer, "{\"optimizeHMD\":true}") == 0) {
                 LeapSetTrackingMode(connectionHandle, eLeapTrackingMode_HMD);
@@ -174,13 +254,15 @@ static int callback_websocket(struct lws *wsi,
             break;
         }
         case LWS_CALLBACK_SERVER_WRITEABLE: {
+            ClientSession* session = (ClientSession*)user;
+
             // Check if first bit is at zero
-            if (!isBitSet(*((int*)user), NEW)) {
+            if (!isBitSet(session->flags, NEW)) {
                 printf("New user, need to send the 'version'\n");
 
                 // Setting the first user bit to 1 so we won't send the version again
-                *((int*)user) = setBit(*((int*)user), NEW);
-                *((int*)user) = setBit(*((int*)user), BACKGROUND);
+                session->flags = setBit(session->flags, NEW);
+                session->flags = setBit(session->flags, BACKGROUND);
 
                 // Create buffer
                 char* buf = (unsigned char*)malloc(LWS_SEND_BUFFER_PRE_PADDING + 16 + LWS_SEND_BUFFER_POST_PADDING);
@@ -207,8 +289,36 @@ static int callback_websocket(struct lws *wsi,
                 return 0;
             }
 
+            // Send pending device events before frames (lock-free fast path)
+            if (session->lastSeenDeviceVersion != deviceGlobalVersion) {
+                pthread_mutex_lock(&ultraleap_lock);
+                int pendingSlot = -1;
+                for (int i = 0; i < MAX_DEVICES; i++) {
+                    if (session->deviceVersions[i] < devices[i].version) {
+                        pendingSlot = i;
+                        break;
+                    }
+                }
+
+                if (pendingSlot >= 0) {
+                    DeviceState dev = devices[pendingSlot];
+                    session->deviceVersions[pendingSlot] = dev.version;
+                    pthread_mutex_unlock(&ultraleap_lock);
+
+                    unsigned char buf[LWS_SEND_BUFFER_PRE_PADDING + DEVICE_EVENT_JSON_MAX_SIZE + LWS_SEND_BUFFER_POST_PADDING];
+                    int len = deviceEventToJSON(&dev, (char*)(buf + LWS_SEND_BUFFER_PRE_PADDING));
+                    lws_write(wsi, buf + LWS_SEND_BUFFER_PRE_PADDING, len, LWS_WRITE_TEXT);
+
+                    lws_callback_on_writable(wsi);
+                    return 0;
+                }
+
+                session->lastSeenDeviceVersion = deviceGlobalVersion;
+                pthread_mutex_unlock(&ultraleap_lock);
+            }
+
             // Check if client is in focus and want background frames, if it does not we stop sending frames
-            if (!isBitSet(*((int*)user), FOCUSED) && !isBitSet(*((int*)user), BACKGROUND)) {
+            if (!isBitSet(session->flags, FOCUSED) && !isBitSet(session->flags, BACKGROUND)) {
                 return 0;
             }
 
@@ -260,7 +370,7 @@ static struct lws_protocols protocols[] = {
     {
         NULL,
         callback_websocket,
-        1 * sizeof(int)
+        sizeof(ClientSession)
     },
     {
         NULL, NULL, 0   /* End of list */

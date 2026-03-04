@@ -29,7 +29,7 @@ For now the goal is to be 100% compatible with what was called protocol `v6` in 
 * Focus and background messages :heavy_check_mark:
 * Switch to HMD mode :heavy_check_mark:
 * Switch to Screentop mode :heavy_check_mark: (NEW - use latest LeapJS `master` branch)
-* Device events :x:
+* Device events :heavy_check_mark:
 * Gestures :x:
 * Secure WebSocket :x:
 
