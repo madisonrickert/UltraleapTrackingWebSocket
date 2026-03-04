@@ -48,7 +48,7 @@ int leapHandsToJSON(char *buf, LEAP_HAND* hands, int count) {
 	switch (count)
 	{
 	case 0:
-		length = sprintf(buf, payload);
+		length = sprintf(buf, "%s", payload);
 		break;
 	case 1: {
 		char* hand = (char*)malloc(LEAP_HAND_MAX_SIZE);
@@ -267,7 +267,7 @@ int leapHandsToPointablesJSON(char *buf, LEAP_HAND* hands, int count) {
 	switch (count)
 	{
 	case 0:
-		length = sprintf(buf, payload);
+		length = sprintf(buf, "%s", payload);
 		break;
 	case 1: {
 		char* hand = (char*)malloc(LEAP_HAND_POINTABLES_MAX_SIZE);

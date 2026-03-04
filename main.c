@@ -215,7 +215,7 @@ static int callback_websocket(struct lws *wsi,
                 return 0;
             }
 
-            snprintf(answer, len + 1, (char*)in);
+            snprintf(answer, len + 1, "%s", (char*)in);
 
             if (strcmp(answer, "{\"focused\":true}") == 0)
             {
@@ -265,7 +265,7 @@ static int callback_websocket(struct lws *wsi,
                 session->flags = setBit(session->flags, BACKGROUND);
 
                 // Create buffer
-                char* buf = (unsigned char*)malloc(LWS_SEND_BUFFER_PRE_PADDING + 16 + LWS_SEND_BUFFER_POST_PADDING);
+                unsigned char* buf = (unsigned char*)malloc(LWS_SEND_BUFFER_PRE_PADDING + 16 + LWS_SEND_BUFFER_POST_PADDING);
 
                 if (buf == NULL) {
                     printf("An error happened when allocating the buffer for the message\n");
@@ -275,7 +275,7 @@ static int callback_websocket(struct lws *wsi,
                     return 0;
                 }
 
-                int len = sprintf(&buf[LWS_SEND_BUFFER_PRE_PADDING], "{\"version\":6}");
+                int len = sprintf((char*)&buf[LWS_SEND_BUFFER_PRE_PADDING], "{\"version\":6}");
 
                 // Send data
                 lws_write(wsi, &buf[LWS_SEND_BUFFER_PRE_PADDING], len, LWS_WRITE_TEXT);
@@ -338,10 +338,10 @@ static int callback_websocket(struct lws *wsi,
             previousEventID = currentFrame->tracking_frame_id;
 
             // Create buffer
-            char* buf = (unsigned char*)malloc(LWS_SEND_BUFFER_PRE_PADDING + LEAP_FRAME_MAX_SIZE + LWS_SEND_BUFFER_POST_PADDING);
+            unsigned char* buf = (unsigned char*)malloc(LWS_SEND_BUFFER_PRE_PADDING + LEAP_FRAME_MAX_SIZE + LWS_SEND_BUFFER_POST_PADDING);
 
             // Fill data
-            int len = leapFrameToJSON(currentFrame, hands, (buf + LWS_SEND_BUFFER_PRE_PADDING));
+            int len = leapFrameToJSON(currentFrame, hands, (char*)(buf + LWS_SEND_BUFFER_PRE_PADDING));
 
             // Unlock access to data
             pthread_mutex_unlock(&ultraleap_lock);
