@@ -103,25 +103,27 @@ void* serviceMessageLoop(void* vargp) {
                 break;
             case eLeapEventType_Device: {
                 LEAP_DEVICE_REF ref = msg.device_event->device;
-                pthread_mutex_lock(&ultraleap_lock);
-                int slot = handleDeviceEvent(msg.device_event, true);
-                bool needPid = (slot >= 0 && devices[slot].pid == 0);
-                pthread_mutex_unlock(&ultraleap_lock);
 
-                // Fetch device PID outside the lock to avoid blocking clients
-                if (needPid) {
+                // Fetch device PID before broadcasting the event to clients,
+                // so they never see type "unknown" due to pid=0.
+                uint32_t pid = 0;
+                {
                     LEAP_DEVICE hDevice;
                     if (LeapOpenDevice(ref, &hDevice) == eLeapRS_Success) {
                         LEAP_DEVICE_INFO info = { .size = sizeof(LEAP_DEVICE_INFO) };
                         LeapGetDeviceInfo(hDevice, &info);
-                        pthread_mutex_lock(&ultraleap_lock);
-                        if (slot >= 0 && slot < MAX_DEVICES) {
-                            devices[slot].pid = info.pid;
-                        }
-                        pthread_mutex_unlock(&ultraleap_lock);
+                        pid = info.pid;
                         LeapCloseDevice(hDevice);
                     }
                 }
+
+                pthread_mutex_lock(&ultraleap_lock);
+                int slot = handleDeviceEvent(msg.device_event, true);
+                if (slot >= 0) {
+                    devices[slot].pid = pid;
+                }
+                pthread_mutex_unlock(&ultraleap_lock);
+
                 printf("Device connected (id: %u)\n", ref.id);
                 break;
             }
