@@ -472,6 +472,42 @@ float getAvgPointableWidth(LEAP_DIGIT finger) {
 		/ 4.0;
 }
 
+const char* devicePIDToTypeString(uint32_t pid) {
+	switch ((eLeapDevicePID)pid) {
+	case eLeapDevicePID_Peripheral:
+	case eLeapDevicePID_Dragonfly:
+	case eLeapDevicePID_Nightcrawler:
+	case eLeapDevicePID_Rigel:
+	case eLeapDevicePID_SIR170:
+	case eLeapDevicePID_3Di:
+	case eLeapDevicePID_LMC2:
+		return "peripheral";
+	default:
+		return "unknown";
+	}
+}
+
+int deviceEventToJSON(const DeviceState* dev, char* buf) {
+	const char* typeStr = devicePIDToTypeString(dev->pid);
+	bool streaming = (dev->status & eLeapDeviceStatus_Streaming) != 0;
+
+	return snprintf(buf, DEVICE_EVENT_JSON_MAX_SIZE,
+		"{\"event\":{"
+			"\"type\":\"deviceEvent\","
+			"\"state\":{"
+				"\"attached\":%s,"
+				"\"id\":%u,"
+				"\"streaming\":%s,"
+				"\"type\":\"%s\""
+			"}"
+		"}}",
+		dev->attached ? "true" : "false",
+		dev->device_id,
+		streaming ? "true" : "false",
+		typeStr
+	);
+}
+
 const char* ultraleapResultToCharArray(eLeapRS result) {
 	switch (result)
 	{
